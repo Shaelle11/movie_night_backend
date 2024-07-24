@@ -4,45 +4,25 @@ const cors = require('cors');
 const session = require('express-session');
 const http = require('http');
 const socketIo = require('socket.io');
-const { MongoClient, ObjectId } = require('mongodb');
+const mongoose = require('mongoose');
 require('dotenv').config();
 
 const app = express();
-const port = 4568;
 const server = http.createServer(app);
 const io = socketIo(server);
 
-// MongoDB connection
-const mongoUri = 'mongodb://localhost:27017'; // Adjust as needed
-const client = new MongoClient(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true });
+const User = require('./models/user');
+const Movie = require('./models/movie');
+const Song = require('./models/song'); // Add Song model
 
-let db, moviesCollection, usersCollection;
+const mongoUri = process.env.MONGO_URI;
 
-client.connect(err => {
-    if (err) throw err;
-    db = client.db('votingApp');
-    moviesCollection = db.collection('movies');
-    usersCollection = db.collection('users');
-
-    // Seed movies if they don't exist
-    moviesCollection.countDocuments((err, count) => {
-        if (err) throw err;
-        if (count === 0) {
-            moviesCollection.insertMany([
-                { name: 'Last Night In Soho', genre: 'Mystery', image: '/images/1ea8df40-afbe-4237-88fd-bba449a6122f.jpeg', votes: 0 },
-                { name: '2 Guns', genre: 'Action', image: '/images/R 2013 ‧ Action_Thriller_Comedy_Crime ‧ 1h 49m.jpeg', votes: 0 },
-                { name: 'SaltBurn', genre: 'Thriller', image: '/images/Saltburn (2023).jpeg', votes: 0 },
-                { name: 'The Outlaws', genre: 'Drama', image: '/images/The OUTLAWS.jpeg', votes: 0 },
-                { name: 'The Killer', genre: 'Action/Thriller', image: 'images/Убийца _ Killer 2023.jpeg', votes: 0 },
-                { name: 'Monkey Man', genre: 'Thriller', image: '/images/5 I found first-pages.jpg', votes: 0 },
-                { name: 'Fail Guy', genre: 'Action', image: '/images/fail guy.jpg', votes: 0 },
-                { name: 'Hitman', genre: 'Drama', image: '/images/hitman.jpg', votes: 0 },
-                { name: 'Operation Ruse', genre: 'Drama', image: '/images/operation ruse.jpg', votes: 0 },
-                { name: 'Beverly Hills Cop Axelf', genre: 'Comedy', image: '/images/Beverly hills cop axelf.jpg', votes: 0 },
-            ]);
-        }
-    });
-});
+mongoose.connect(mongoUri, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+})
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => console.error('Failed to connect to MongoDB', err));
 
 app.use(cors({
     origin: 'http://localhost:3000',
@@ -50,47 +30,48 @@ app.use(cors({
 }));
 app.use(bodyParser.json());
 app.use(session({
-    secret: 'your-secret-key', // Change this to a secure key
+    secret: process.env.SECRET_KEY,
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: false } // Set to true if using HTTPS
+    cookie: { secure: false }
 }));
 
-app.use('/public', express.static('public'));
+// Static movie data
+const staticMovies = [
+    { name: 'Inception', genre: 'Sci-Fi', image: 'inception.jpg', votes: 0 },
+    { name: 'The Matrix', genre: 'Action', image: 'matrix.jpg', votes: 0 },
+    { name: 'Interstellar', genre: 'Adventure', image: 'interstellar.jpg', votes: 0 },
+];
 
-const ADMIN_PASSKEY = "ADMIN123";
-const INVITEE_PASSKEY = "INVITE456";
-const SUPER_ADMIN_PASSKEY = "SUPERADMIN123";
+const initializeMovies = async () => {
+    const count = await Movie.countDocuments();
+    if (count === 0) {
+        await Movie.insertMany(staticMovies);
+        console.log('Static movies added to the database');
+    }
+};
 
-app.post('/invite', (req, res) => {
+initializeMovies();
+
+// Routes
+app.post('/invite', async (req, res) => {
     const { passkey, title, name } = req.body;
 
-    if (passkey === ADMIN_PASSKEY) {
-        req.session.role = "Admin";
+    if ([process.env.ADMIN_PASSKEY, process.env.INVITEE_PASSKEY, process.env.SUPER_ADMIN_PASSKEY].includes(passkey)) {
+        req.session.role = passkey === process.env.ADMIN_PASSKEY ? 'Admin' :
+                           passkey === process.env.INVITEE_PASSKEY ? 'Invitee' : 'SuperAdmin';
         req.session.title = title;
         req.session.name = name;
-        req.session.userId = new ObjectId();
-        res.json({ role: "Admin", title, name });
-    } else if (passkey === INVITEE_PASSKEY) {
-        req.session.role = "Invitee";
-        req.session.title = title;
-        req.session.name = name;
-        req.session.userId = new ObjectId();
-        res.json({ role: "Invitee", title, name });
-    } else if (passkey === SUPER_ADMIN_PASSKEY) {
-        req.session.role = "SuperAdmin";
-        req.session.title = title;
-        req.session.name = name;
-        req.session.userId = new ObjectId();
-        res.json({ role: "SuperAdmin", title, name });
+        req.session.userId = new mongoose.Types.ObjectId();
+        res.json({ role: req.session.role, title, name });
     } else {
-        res.status(400).json({ error: "Invalid passkey. Please try again." });
+        res.status(400).json({ error: 'Invalid passkey. Please try again.' });
     }
 });
 
 app.get('/movies', async (req, res) => {
     try {
-        const movies = await moviesCollection.find().toArray();
+        const movies = await Movie.find();
         res.json(movies);
     } catch (error) {
         res.status(500).json({ error: 'Error fetching movies' });
@@ -105,45 +86,81 @@ app.post('/vote', async (req, res) => {
         return res.status(401).json({ error: 'User not authenticated' });
     }
 
+    if (!mongoose.Types.ObjectId.isValid(movieId)) {
+        return res.status(400).json({ error: 'Invalid movie ID' });
+    }
+
     try {
-        // Check if the user has already voted for any movie
-        const user = await usersCollection.findOne({ _id: userId });
-        if (user && user.votedMovies && user.votedMovies.length > 0) {
-            return res.status(400).json({ error: 'You have already voted for a movie' });
+        // Check if the user has already voted
+        const user = await User.findById(userId);
+        if (user.hasVoted) {
+            return res.status(403).json({ error: 'You have already voted' });
         }
 
-        // Update the movie votes
-        const result = await moviesCollection.findOneAndUpdate(
-            { _id: new ObjectId(movieId) },
-            { $inc: { votes: 1 } },
-            { returnOriginal: false }
-        );
-
-        if (!result.value) {
+        // Find and update the movie
+        const movie = await Movie.findById(movieId);
+        if (!movie) {
             return res.status(404).json({ error: 'Movie not found' });
         }
 
-        // Update the user’s votedMovies list
-        await usersCollection.updateOne(
-            { _id: userId },
-            { $set: { votedMovies: [movieId] } },
-            { upsert: true }
-        );
+        movie.votes += 1;
+        await movie.save();
 
-        io.emit('voteUpdate', result.value);
-        res.status(200).json({ success: true });
+        // Mark the user as having voted
+        user.hasVoted = true;
+        await user.save();
+
+        // Emit updated movie to all clients
+        const movies = await Movie.find(); // Fetch all movies to update the client
+        io.emit('movieVoteUpdate', movies);
+        res.json({ success: true, movies });
     } catch (error) {
+        console.error('Error processing vote:', error);
         res.status(500).json({ error: 'Error processing vote' });
     }
 });
 
+// Song submission route
+app.post('/submit-song', async (req, res) => {
+    const { singer, song } = req.body;
+    const userId = req.session.userId;
+
+    if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+    }
+
+    try {
+        const newSong = new Song({ singer, song, submittedBy: userId });
+        await newSong.save();
+        res.json({ success: true, message: 'Song submitted successfully' });
+    } catch (error) {
+        console.error('Error submitting song:', error);
+        res.status(500).json({ error: 'Error submitting song' });
+    }
+});
+
+// Get songs (for SuperAdmin)
+app.get('/get-songs', async (req, res) => {
+    if (req.session.role !== 'SuperAdmin') {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+
+    try {
+        const songs = await Song.find().populate('submittedBy', 'name');
+        res.json(songs);
+    } catch (error) {
+        console.error('Error fetching songs:', error);
+        res.status(500).json({ error: 'Error fetching songs' });
+    }
+});
+
 io.on('connection', (socket) => {
-    console.log('New client connected');
+    console.log('a user connected');
     socket.on('disconnect', () => {
-        console.log('Client disconnected');
+        console.log('user disconnected');
     });
 });
 
-server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}`);
+server.listen(process.env.PORT, () => {
+    console.log(`Server running on http://localhost:${process.env.PORT}`);
 });
