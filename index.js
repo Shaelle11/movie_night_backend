@@ -14,7 +14,6 @@ const io = socketIo(server);
 const User = require('./models/user');
 const Movie = require('./models/movie');
 const Song = require('./models/song'); // Add Song model
-const Invitee = require('./models/invite'); // Add Invitee model
 
 const mongoUri = process.env.MONGO_URI;
 
