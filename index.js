@@ -3,8 +3,8 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const session = require('express-session');
 const http = require('http');
-const socketIo = require('socket.io');
 const mongoose = require('mongoose');
+const socketIo = require('socket.io');
 require('dotenv').config();
 
 const app = express();
@@ -14,6 +14,7 @@ const io = socketIo(server);
 const User = require('./models/user');
 const Movie = require('./models/movie');
 const Song = require('./models/song'); // Add Song model
+const Invitee = require('./models/invite'); // Add Invitee model
 
 const mongoUri = process.env.MONGO_URI;
 
@@ -24,34 +25,33 @@ mongoose.connect(mongoUri, {
 .then(() => console.log('Connected to MongoDB'))
 .catch(err => console.error('Failed to connect to MongoDB', err));
 
+// CORS configuration
 app.use(cors({
-    origin: 'http://localhost:3000',
-    credentials: true
+    origin: ['https://movie-night-client-nine.vercel.app', 'http://localhost:3000'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+app.options('*', cors());
+
+// Body parser
 app.use(bodyParser.json());
+
+// Session management
 app.use(session({
     secret: process.env.SECRET_KEY,
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: false }
+    cookie: { secure: false } // Set to true in production with HTTPS
 }));
 
-// Static movie data
-const staticMovies = [
-    { name: 'Inception', genre: 'Sci-Fi', image: 'inception.jpg', votes: 0 },
-    { name: 'The Matrix', genre: 'Action', image: 'matrix.jpg', votes: 0 },
-    { name: 'Interstellar', genre: 'Adventure', image: 'interstellar.jpg', votes: 0 },
-];
-
-const initializeMovies = async () => {
-    const count = await Movie.countDocuments();
-    if (count === 0) {
-        await Movie.insertMany(staticMovies);
-        console.log('Static movies added to the database');
+// Middleware to check authentication
+const isAuthenticated = (req, res, next) => {
+    if (req.session.userId) {
+        return next();
     }
+    res.status(401).json({ error: 'User not authenticated' });
 };
-
-initializeMovies();
 
 // Routes
 app.post('/invite', async (req, res) => {
@@ -121,13 +121,9 @@ app.post('/vote', async (req, res) => {
 });
 
 // Song submission route
-app.post('/submit-song', async (req, res) => {
+app.post('/submit-song', isAuthenticated, async (req, res) => {
     const { singer, song } = req.body;
     const userId = req.session.userId;
-
-    if (!userId) {
-        return res.status(401).json({ error: 'User not authenticated' });
-    }
 
     try {
         const newSong = new Song({ singer, song, submittedBy: userId });
@@ -140,7 +136,7 @@ app.post('/submit-song', async (req, res) => {
 });
 
 // Get songs (for SuperAdmin)
-app.get('/get-songs', async (req, res) => {
+app.get('/get-songs', isAuthenticated, async (req, res) => {
     if (req.session.role !== 'SuperAdmin') {
         return res.status(403).json({ error: 'Access denied' });
     }
@@ -154,6 +150,21 @@ app.get('/get-songs', async (req, res) => {
     }
 });
 
+// Invitee submission route
+app.post('/invitee', async (req, res) => {
+    const { name, inviteeName, letter } = req.body;
+
+    try {
+        const newInvitee = new Invitee({ name, inviteeName, letter });
+        await newInvitee.save();
+        res.json({ success: true, message: 'Invitee added successfully' });
+    } catch (error) {
+        console.error('Error submitting invitee:', error);
+        res.status(500).json({ error: 'Error submitting invitee' });
+    }
+});
+
+// Socket.IO connection
 io.on('connection', (socket) => {
     console.log('a user connected');
     socket.on('disconnect', () => {
