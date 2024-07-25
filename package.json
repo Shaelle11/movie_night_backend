@@ -1,10 +1,11 @@
 {
-  "name": "backend",
+  "name": "movie-night-backend",
   "version": "1.0.0",
-  "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "echo 'Building...'"
   },
   "keywords": [],
   "author": "",
@@ -22,6 +23,8 @@
     "pg": "^8.12.0",
     "sequelize": "^6.37.3",
     "sequelize-cli": "^6.6.2",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "vercel": "^34.3.1"
   }
 }
+
